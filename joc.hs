@@ -1,4 +1,5 @@
 {-# LANGUAGE LambdaCase #-}
+
 module Main (main) where
 
 import System.Random (randomIO)
@@ -14,20 +15,23 @@ import Control.Monad (forM_)
 
 {- Wrapper for a strategy function, which computes a column to play for a
    given player on given board -}
-newtype Strategy = Strategy { runStrategy :: Board -> Player -> IO Int }
+newtype Strategy = Strategy { runStrategy :: Player -> Board -> IO Int }
 
-
+-- |Trivial data constructor to parametrize over each player
 data Player = Red | Yellow deriving (Eq, Show)
 
+-- |Data constructor to represent a given board
 data Board = Board
-  { boardSize    :: (Int, Int)
-  , boardColumns :: [[Player]] }
+  { boardSize    :: (Int, Int)   -- (number of columns, number of rows)
+  , boardColumns :: [[Player]] } -- (list of columns)
 
+-- |Data constructor to represent a given game
 data Game = Game
   { gameBoard      :: Board
   , redStrategy    :: Strategy
   , yellowStrategy :: Strategy
   , currentTurn    :: Player }
+
 
 data GameCommand = GCSetup | GCPlay | GCQuit
 
@@ -72,7 +76,7 @@ mapIth i f xs =
 
 -- | Pick a random column from all the available ones
 randomS :: Strategy
-randomS = Strategy $ \board _ -> randomPick (getAvailableCols board)
+randomS = Strategy $ \_ board -> randomPick (getAvailableCols board)
   where randomPick xs = do
           random <- randomIO :: IO Int
           let i = random `mod` length xs
@@ -81,14 +85,14 @@ randomS = Strategy $ \board _ -> randomPick (getAvailableCols board)
 -- | Try to win. Otherwise, prevent the other player from winning. Play for the longest line.
 greedyS :: Strategy
 greedyS = Strategy $
-  \board player ->
+  \player board ->
     let rival = otherPlayer player
         -- get a score from the lines the player/rival can make by playing on column col
         greedyHeuristic col = case (scorePlayer player, scorePlayer rival) of
             (4, _) -> 5 -- player can connect 4 --> score 5 (Highest)
             (_, 4) -> 4 -- rival can connect 4  --> score 4
             (l, _) -> l -- player can connect l --> score (3, 2, 1)
-            where scorePlayer p = length (getLongestLine p col board)
+            where scorePlayer p = length (getLongestLine p board col)
     in return . maximumBy (comparing greedyHeuristic) . getAvailableCols $ board
 
 smartS :: Strategy
@@ -97,17 +101,24 @@ smartS = Strategy $ error "TODO"
 -- | Prompt the user to pick an available column.
 humanS :: Strategy
 humanS = Strategy $
-  \board p ->
+  \player board ->
     let validCols = getAvailableCols board
         (nCols, _) = boardSize board
         readValidColumn = do
-          col <- columnSelector p board
+          col <- columnSelector player board
           if col `elem` validCols
             then return col
             else readValidColumn
     in readValidColumn
 
------------ smartS ---------------
+
+---------- SMART STRATEGY UTILS -------------
+---------------------------------------------
+negmaxScore2 :: Board -> Player -> Int
+negmaxScore2 board =
+  let validCols = getAvailableCols board
+  in undefined
+  
 
 
 
@@ -125,8 +136,8 @@ getAvailableCols Board {boardSize = (nCols, nRows), boardColumns = columns} =
 
 {- |Given a player, a column and a board, returns the longest line of player stones
    caused by the player playing a piece on that column -}
-getLongestLine :: Player -> Int -> Board -> [(Int, Int)]
-getLongestLine player col board =
+getLongestLine :: Player -> Board -> Int -> [(Int, Int)]
+getLongestLine player board col =
   let (nCols, nRows) = boardSize board
       columns = boardColumns board
       row = length (columns !! col)
@@ -147,6 +158,9 @@ getLongestLine player col board =
 
   in maximumBy (comparing length) [ver, hor, dg1, dg2]
 
+-- |Whether a player wins by playing on a column of a board.
+isWinningMove :: Player -> Board -> Int -> Bool
+isWinningMove p b c = length (getLongestLine p b c) >= 4
 
 -- |Given a board and a (col, row), returns the stone's player placed there (if any)
 getPlayerAt :: Board -> (Int, Int) -> Maybe Player
@@ -158,8 +172,8 @@ getPlayerAt Board {boardSize = (nCols, _), boardColumns = columns} (col, row) =
 
 
 -- |Given a player and a column of a board, places a piece on that column
-playMove :: Player -> Int -> Board -> Board
-playMove player col board = board { boardColumns = mapIth col (++ [player]) (boardColumns board) }
+playMove :: Player -> Board -> Int -> Board
+playMove player board col = board { boardColumns = mapIth col (++ [player]) (boardColumns board) }
 
 
 ---------------- GAME IO ------------------
@@ -172,9 +186,14 @@ main = initGame >> setupGame >>= loopGame
                GCSetup -> main
                GCQuit  -> quitGame
 
+              
+{-- |First thing to be called on main function -}
 initGame :: IO ()
 initGame = ANSI.clearScreen >> ANSI.hideCursor
 
+
+{-- |Displays menus to configure a board size and the players mode.
+     Yields a game with this parameters.  -}
 setupGame :: IO Game
 setupGame = do
   ANSI.setCursorPosition 1 0
@@ -224,10 +243,10 @@ runGame  game@Game{ gameBoard = board, currentTurn = player} = do
             Yellow -> yellowStrategy game
             Red    -> redStrategy game
       -- Run the strategy to get a column to play
-      column <- runStrategy strategy board player 
-      let line = getLongestLine player column board
+      column <- runStrategy strategy player board 
+      let line = getLongestLine player board column
           -- Updated board by Player playing on column
-          board' = playMove player column board
+          board' = playMove player board column
       if length line >= 4
         -- player has won.
         then drawWinningLine board' line >> return (game, Just player)
