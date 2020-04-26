@@ -26,11 +26,10 @@ data Game = Game
 
 data GameCommand = GCSetup | GCPlay | GCExit
 
-data Key = KeyLeft | KeyRight | KeyEnter deriving Show
+data Key = KeyLeft | KeyRight | KeyEnter
 
------------- Constants -------------------
-
-(x0, y0) = (0, 0)
+------------ GAME CONSTANTS -------------------
+firstPlayer = Red
 
 charEmpty = '·'
 charPiece = 'O'
@@ -41,10 +40,10 @@ colorRed    = ANSI.xterm6LevelRGB 5 0 0 -- Red
 colorYellow = ANSI.xterm6LevelRGB 5 5 0 -- Yellow
 
 defaultGame = Game
-  { gameBoard      = getEmptyBoard 5 4
+  { gameBoard      = emptyBoard (7, 6)
   , strategyRed    = humanS
   , strategyYellow = humanS
-  , currentTurn    = Red }
+  , currentTurn    = firstPlayer }
 
 colorForPlayer = \case
   Red    -> colorRed
@@ -89,9 +88,8 @@ humanS = Strategy $
 
 
 ----------- BOARD UTILS ---------------
-getEmptyBoard :: Int -> Int -> Board
-getEmptyBoard nCols nRows = Board {boardSize = (nCols, nRows), boardColumns = empty}
-  where empty = replicate nCols []
+emptyBoard :: (Int, Int) -> Board
+emptyBoard size@(nCols, _) = Board {boardSize = size, boardColumns = replicate nCols []}
 
 getAvailableCols :: Board -> [Int]
 getAvailableCols Board {boardSize = (nCols, nRows), boardColumns = columns} =
@@ -149,32 +147,42 @@ main = initGame >> setupGame >>= loopGame
 initGame :: IO ()
 initGame = ANSI.clearScreen >> ANSI.hideCursor
 
-quitGame :: IO ()
-quitGame = ANSI.showCursor
-
-endGame :: (Game, Maybe Player) -> IO GameCommand
-endGame (game, winner) = do
-  let height = (+2) . snd . boardSize. gameBoard $ game
-  ANSI.setCursorPosition height 0
-  case winner of 
-    Nothing -> putStr "Game drawn.."
-    Just p -> do
-        putStr "Player "
-        ANSI.setSGR [ANSI.SetPaletteColor ANSI.Foreground (colorForPlayer p)]
-        putStr (show p)
-        ANSI.setSGR [ANSI.Reset]
-        putStr " won! "
-        hFlush stdout
-  ANSI.setCursorPosition (height+1) 0
-  menuSelector [ (GCPlay , "Play again")
-               , (GCSetup, "Options")
-               , (GCExit , "Exit") ]
-
 setupGame :: IO Game
-setupGame = return defaultGame
+setupGame = do
+  ANSI.setCursorPosition 1 0
+  putStr "Board size: "
+  ANSI.setCursorPosition 3 2
+  size <- menuSelector 
+    [ ((6,5)  , "Mini (6x5)")
+    , ((7,6)  , "Standard (7x6)")
+    , ((9,7)  , "Large (9x7)") 
+    , ((13,11), "Huge (13x11)") ]  
+
+  redS <- promptStrategy (5, 0) Red
+  yellowS  <- promptStrategy (9, 0) Yellow
+  return Game
+    { gameBoard      = emptyBoard size
+    , strategyRed    = redS
+    , strategyYellow = yellowS
+    , currentTurn    = firstPlayer }
+
+  where promptStrategy (y, x) p = do
+          ANSI.setCursorPosition y x
+          putStr "Player "
+          ANSI.setSGR [ANSI.SetPaletteColor ANSI.Foreground (colorForPlayer p)]
+          putStr (show p)
+          ANSI.setSGR [ANSI.Reset]
+          putStr " mode: " 
+          ANSI.setCursorPosition (y+2) (x+2)
+          menuSelector 
+            [ (randomS, "Dummy")
+            , (greedyS, "Mediocre")
+            , (smartS , "Beast") 
+            , (humanS , "Human")]
 
 runGame :: Game -> IO (Game, Maybe Player)
 runGame  game@Game{ gameBoard = board, currentTurn = player} = do
+  ANSI.clearScreen
   drawBoard board
   if null (getAvailableCols board)
     then return (game, Nothing) -- No more moves available -> Game drawn
@@ -189,19 +197,40 @@ runGame  game@Game{ gameBoard = board, currentTurn = player} = do
         then runGame game { gameBoard = board', currentTurn = otherPlayer player }
         else drawWinningLine board' line >> return (game, Just player)
 
+endGame :: (Game, Maybe Player) -> IO GameCommand
+endGame (game, winner) = do
+  let height = (+3) . snd . boardSize. gameBoard $ game
+  ANSI.setCursorPosition height 0
+  case winner of 
+    Nothing -> putStr "Game drawn.."
+    Just p -> do
+        putStr "Player "
+        ANSI.setSGR [ANSI.SetPaletteColor ANSI.Foreground (colorForPlayer p)]
+        putStr (show p)
+        ANSI.setSGR [ANSI.Reset]
+        putStr " won! "
+        hFlush stdout
+  ANSI.setCursorPosition (height+2) 2
+  menuSelector [ (GCPlay , "Play again")
+                , (GCSetup, "Options")
+                , (GCExit , "Exit") ]
+
+quitGame :: IO ()
+quitGame = ANSI.showCursor
+
 drawBoard :: Board -> IO ()
 drawBoard board@Board{boardSize = (nCols, nRows), boardColumns = columns} = do
   -- Draw the frame
-  ANSI.setCursorPosition (y0 + nRows + 1) x0
+  ANSI.setCursorPosition (nRows + 1) 0
   putStr $ "└"  ++ replicate nCols '─' ++ "┘"
   forM_ [1..nRows] $ \dy -> do
-    ANSI.setCursorPosition (y0 + dy) x0
+    ANSI.setCursorPosition dy 0
     putStr "│"
     ANSI.cursorForward nCols
     putStr "│"
   -- Draw the board
   forM_ ( (,) <$> [0..nCols-1] <*> [0..nRows-1] ) $ \(c, r) ->  do
-    ANSI.setCursorPosition (y0 + nRows - r) (x0 + c + 1)
+    ANSI.setCursorPosition (nRows - r) (c + 1)
     let (color, char) = case getPlayerAt board (c, r) of
                           Nothing -> (colorEmpty, charEmpty)
                           Just p  -> (colorForPlayer p, charPiece)
@@ -214,7 +243,7 @@ drawWinningLine :: Board -> [(Int, Int)] -> IO ()
 drawWinningLine board@Board{boardSize = (nCols, nRows), boardColumns = columns} line = do
   forM_ line $ \(c, r) -> do
     let color = colorForPlayer . fromJust . getPlayerAt board $ (c, r)
-    ANSI.setCursorPosition (y0 + nRows - r) (x0 + c + 1)
+    ANSI.setCursorPosition (nRows - r) (c + 1)
     ANSI.setSGR [ANSI.SetPaletteColor ANSI.Foreground color]
     putChar charWin
     ANSI.setSGR [ANSI.Reset]
@@ -233,11 +262,10 @@ menuSelector menu = do
           highlight a = ANSI.setSGR [ANSI.SetSwapForegroundBackground True] >> a >> ANSI.setSGR [ANSI.Reset]
           separate = intersperse (putStr separator)
           separator = "  |  "
-          lengthMenu = length separator * (length (foldMap snd menu) - 1)
-
+          lengthMenu = length (foldMap snd menu) + length separator * (length menu - 1)
 columnSelector :: Player -> (Int, Int) -> IO Int
 columnSelector player (l, r) = do
-  ANSI.setCursorPosition x0 y0
+  ANSI.setCursorPosition 0 0
   i <- selectorController (l, r) printF ((l + r) `quot` 2)
   ANSI.clearLine
   return i
