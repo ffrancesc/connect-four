@@ -37,9 +37,15 @@ charEmpty = '·'
 charPiece = 'O'
 charWin   = '0'
 
-colorEmpty  = ANSI.xterm6LevelRGB 1 1 1
-colorRed    = ANSI.xterm6LevelRGB 5 0 0
-colorYellow = ANSI.xterm6LevelRGB 5 5 0
+colorEmpty  = ANSI.xterm6LevelRGB 1 1 1 -- Grey
+colorRed    = ANSI.xterm6LevelRGB 5 0 0 -- Red
+colorYellow = ANSI.xterm6LevelRGB 5 5 0 -- Yellow
+
+defaultGame = Game 
+  { gameBoard      = getEmptyBoard 7 6
+  , strategyRed    = humanS
+  , strategyYellow = humanS
+  , currentTurn    = Red } 
 
 colorForPlayer = \case 
   Red    -> colorRed
@@ -135,28 +141,27 @@ otherPlayer = \case
 ---------------- GAME IO ------------------
 main :: IO ()
 main = initGame >> setupGame >>= loopGame
-  where loopGame game =
-          runGame game >> endGame >>= \case 
-               GCPlay  -> loopGame game
+  where loopGame g =
+          runGame g >> endGame >>= \case 
+               GCPlay  -> loopGame g
                GCSetup -> main
-               GCExit  -> return ()
+               GCExit  -> quitGame
   
 initGame :: IO ()
-initGame = ANSI.clearScreen  >> ANSI.hideCursor
+initGame = ANSI.clearScreen >> ANSI.hideCursor
+
+quitGame :: IO ()
+quitGame = ANSI.showCursor
 
 endGame :: IO GameCommand
 endGame = do
   ANSI.setCursorPosition 0 0
-  menuSelector [ (GCPlay  , "Play again")
-               , (GCSetup , "Options")
-               , (GCExit  , "Exit") ]
+  menuSelector [ (GCPlay , "Play again")
+               , (GCSetup, "Options")
+               , (GCExit , "Exit") ]
 
 setupGame :: IO Game
-setupGame = do
-  return Game { gameBoard = getEmptyBoard 7 6
-              , strategyRed    = humanS
-              , strategyYellow = humanS
-              , currentTurn = Red } 
+setupGame = return defaultGame
 
 runGame :: Game -> IO (Maybe Player)
 runGame game = do
@@ -213,12 +218,14 @@ menuSelector menu = do
   i <- selectorController (0, length menu - 1) printF 0
   return $ fst (menu !! i)
     where printF i = do
-            let as = intersperse (putStr "  |  ") . mapIth i (\a -> highlight >> a >> ANSI.setSGR [] ) . map (putStr . snd) $ menu
             ANSI.clearLine
-            sequence_ as
-            ANSI.cursorBackward (5*(sum (map (length . snd) menu ) -1))
+            sequence_ . separate . mapIth i highlight . map (putStr . snd) $ menu
+            ANSI.cursorBackward lengthMenu
             hFlush stdout
-          highlight = ANSI.setSGR [ANSI.SetSwapForegroundBackground True]
+          highlight a = ANSI.setSGR [ANSI.SetSwapForegroundBackground True] >> a >> ANSI.setSGR [ANSI.Reset]
+          separate = intersperse (putStr separator) 
+          separator = "  |  "
+          lengthMenu = length separator * (length (foldMap snd menu) - 1)
 
 columnSelector :: Player -> (Int, Int) -> IO Int
 columnSelector player (l, r) = do
@@ -236,7 +243,7 @@ columnSelector player (l, r) = do
             hFlush stdout
 
 selectorController :: (Int, Int) -> (Int -> IO ()) -> Int -> IO Int
-selectorController (l, r) paintF = go
+selectorController (l, r) paintF i0 = go i0
   where go i = paintF i >> getKey >>= \case
             Just KeyRight -> if i < r then go (i+1) else go i
             Just KeyLeft  -> if l < i then go (i-1) else go i
