@@ -1,8 +1,9 @@
+{-# LANGUAGE LambdaCase #-}
 module Main (main) where
 
 import System.Random (randomIO)
-import System.Console.ANSI
-import System.IO (BufferMode(..), stdin, hReady, hSetBuffering, hSetEcho)
+import qualified System.Console.ANSI as ANSI
+import System.IO (BufferMode(..), stdin, hReady, hSetBuffering, hSetEcho, hFlush, stdout)
 import Data.Ord (comparing)
 import Data.List (groupBy, maximumBy, sortOn)
 import Data.Map.Strict  (Map, fromList, (!), insertWith) 
@@ -11,7 +12,7 @@ import Control.Monad (forM_, when)
 ---------- TYPE DECLARATIONS -----------
 newtype Strategy = Strategy { runStrategy :: Board -> Player -> IO Int }
 
-data Player = Y | R deriving (Eq, Show)
+data Player = Yellow | Red deriving (Eq, Show)
 
 data Board = Board 
   { boardSize :: (Int, Int)
@@ -19,9 +20,9 @@ data Board = Board
 
 data Game = Game
   { gameBoard   :: Board
-  , playerY :: Strategy
-  , playerR :: Strategy 
-  , turn    :: Player }
+  , strategyRed :: Strategy
+  , strategyYellow :: Strategy 
+  , currentTurn    :: Player }
 
 ------------ Strategies -------------------
 randomS :: Strategy
@@ -60,8 +61,6 @@ humanS = Strategy $
 
 
 ----------- BOARD UTILS ---------------
-
-
 getEmptyBoard :: Int -> Int -> Board
 getEmptyBoard nCols nRows = Board {boardSize = (nCols, nRows), boardColumns = empty}
   where empty = fromList $ [1..nCols] `zip` repeat []
@@ -112,13 +111,15 @@ playMove :: Board -> Player -> Int -> Board
 playMove b p c = b { boardColumns = insertWith (flip (++)) c [p] (boardColumns b) }
 
 otherPlayer :: Player -> Player
-otherPlayer R = Y
-otherPlayer Y = R
+otherPlayer = \case
+  Yellow -> Red
+  Red -> Yellow
 
 ---------------- GAME IO ------------------
-colorForPlayer :: Player -> Color
-colorForPlayer R = Red
-colorForPlayer Y = Yellow
+colorForPlayer :: Player -> ANSI.SGR
+colorForPlayer = \case
+  Yellow -> ANSI.SetPaletteColor ANSI.Foreground (ANSI.xterm6LevelRGB 4 0 0)
+  Red    -> ANSI.SetPaletteColor ANSI.Foreground (ANSI.xterm6LevelRGB 4 4 0)
 
 main :: IO ()
 main = do
@@ -126,77 +127,96 @@ main = do
   winner <- setupGame >>= runGame 
   putStrLn $ case winner of 
                Nothing -> "Game Drawn!"
-               Just Y  -> "Yellow wins!"
-               Just R  -> "Red wins!"
+               Just p  -> show p ++ "wins!"
   getKey
   main
 
 initGame :: IO ()
-initGame = clearScreen -- >> hideCursor
+initGame = ANSI.clearScreen  >> ANSI.hideCursor
 
 setupGame :: IO Game
 setupGame = do
-  return Game{gameBoard = getEmptyBoard 7 6, playerY = greedyS, playerR = humanS, turn = R} 
+  return Game { gameBoard = getEmptyBoard 7 6
+              , strategyYellow = greedyS
+              , strategyRed    = humanS
+              , currentTurn = Red } 
 
 runGame :: Game -> IO (Maybe Player)
 runGame game = do
   let board = gameBoard game
   drawBoard (0,0) board
-  setCursorPosition 0 0
+  ANSI.setCursorPosition 0 0
   if null (getAvailableCols board)
     then return Nothing -- No more moves available -> Game drawn
     else do
-      let player = turn game
-          strat = case player of 
-            Y -> playerY game
-            R -> playerR game
-      move <- runStrategy strat board player
+      let player   = currentTurn game
+          strategy = case player of 
+            Yellow -> strategyYellow game
+            Red    -> strategyRed game
+      move <- runStrategy strategy board player
       if isWinningMove board player move
         then return (Just player)
-        else runGame game { gameBoard = playMove board player move, turn = otherPlayer player }
+        else runGame game { gameBoard = playMove board player move, currentTurn = otherPlayer player }
  
 drawBoard :: (Int, Int) -> Board -> IO ()
 drawBoard (x, y) board@Board{boardSize = (nCols, nRows), boardColumns = columns} = do
   -- Draw the frame
-  setCursorPosition (y+nRows+1) x
+  ANSI.setCursorPosition (y+nRows+1) x
   putStr $ "└"  ++ replicate nCols '─' ++ "┘"
   forM_ [1..nRows] $ \dy -> do
-    setCursorPosition (y+dy) x 
+    ANSI.setCursorPosition (y+dy) x 
     putStr "│"
-    cursorForward nCols
+    ANSI.cursorForward nCols
     putStr "│"
   -- Draw the board
   forM_ ( (,) <$> [1..nCols] <*> [1..nRows] ) $ \(c, r) ->  do
-    setCursorPosition (y+nRows-r+1) (x+c)
-    case  getPlayerAt board (c, r) of
+    ANSI.setCursorPosition (y+nRows-r+1) (x+c)
+    case getPlayerAt board (c, r) of
       Nothing -> putStr "·"
-      Just p  -> setSGR [SetColor Foreground Dull (colorForPlayer p)] >> putChar '0' >> setSGR []  
+      Just p  -> ANSI.setSGR [colorForPlayer p] >> putChar '0' >> ANSI.setSGR [] 
+  hFlush stdout 
             
 
 arrowSelector :: Player -> Int -> IO Int
-arrowSelector p n = do
-  hSetEcho stdin False
-  hSetBuffering stdin NoBuffering
-  go $ n `quot` 2
+arrowSelector p n = go $ n `quot` 2
     where go i = do
-            clearLine
-            cursorForward i 
-            setSGR [SetColor Foreground Dull (colorForPlayer p)]
+            ANSI.clearLine
+            ANSI.cursorForward i 
+            ANSI.setSGR [colorForPlayer p]
             putStr "0"
-            setSGR [Reset]
-            cursorBackward (i+1)
-            key <- getKey
-            if key /= "\ESC" 
-              then case key of
-                "\ESC[C" -> if i < n then go (i+1) else go n
-                "\ESC[D" -> if 1 < i then go (i-1) else go 1
-                "\n"     -> cursorBackward 1 >> return i
-                _        -> go i
-              else arrowSelector p n
+            ANSI.setSGR []
+            ANSI.cursorBackward (i+1)
+            hFlush stdout
+            getKey >>= \case
+                Just KeyRight -> if i < n then go (i+1) else go n
+                Just KeyLeft  -> if 1 < i then go (i-1) else go 1
+                Just KeyEnter -> ANSI.cursorBackward 1 >> return i
+                Nothing       -> go i
 
-getKey :: IO String
-getKey = reverse <$> getKey' ""
-  where getKey' chars = do
-          char <- getChar
-          more <- hReady stdin
-          (if more then getKey' else return) (char:chars)
+
+data Key = KeyLeft | KeyRight | KeyEnter deriving Show
+
+
+-- Parses an Arrow key from stdin
+-- If arrow key pressed: IO (Just ArrowKey)
+-- If no arrow pressed:  IO Nothing
+getKey :: IO (Maybe Key)
+getKey = do
+  hSetEcho stdout False
+  hSetBuffering stdin NoBuffering
+  getChar >>= \case
+    '\ESC' -> parseArrow
+    '\n'   -> return $ Just KeyEnter
+    _  -> getKey
+
+
+-- Helper function for getKey
+parseArrow :: IO (Maybe Key)
+parseArrow =
+  getChar >>= \case 
+    '\ESC' -> parseArrow
+    '['    -> getChar >>= \case
+          'C' -> return $ Just KeyRight
+          'D' -> return $ Just KeyLeft
+          _   -> return Nothing
+    _   -> return Nothing
