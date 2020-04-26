@@ -29,7 +29,7 @@ data Game = Game
   , yellowStrategy :: Strategy
   , currentTurn    :: Player }
 
-data GameCommand = GCSetup | GCPlay | GCExit
+data GameCommand = GCSetup | GCPlay | GCQuit
 
 data Key = KeyLeft | KeyRight | KeyEnter
 
@@ -162,7 +162,6 @@ playMove :: Player -> Int -> Board -> Board
 playMove player col board = board { boardColumns = mapIth col (++ [player]) (boardColumns board) }
 
 
-
 ---------------- GAME IO ------------------
 -------------------------------------------
 main :: IO ()
@@ -171,7 +170,7 @@ main = initGame >> setupGame >>= loopGame
           runGame g >>= endGame >>= \case
                GCPlay  -> loopGame g
                GCSetup -> main
-               GCExit  -> quitGame
+               GCQuit  -> quitGame
 
 initGame :: IO ()
 initGame = ANSI.clearScreen >> ANSI.hideCursor
@@ -251,8 +250,8 @@ endGame (game, winner) = do
         hFlush stdout
   ANSI.setCursorPosition (height+2) 2
   menuSelector [ (GCPlay , "Play again")
-               , (GCSetup, "Options")
-               , (GCExit , "Exit") ]
+               , (GCSetup, "Setup")
+               , (GCQuit , "Quit") ]
 
 
 {-- |Last thing to be called on main function -}
