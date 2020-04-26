@@ -317,7 +317,7 @@ columnSelector :: Player -> Board -> IO Int
 columnSelector player board = do
   let (nCols, _) = boardSize board
   ANSI.setCursorPosition 0 0
-  i <- selectorController (0, nCols) printF (nCols `quot` 2)
+  i <- selectorController (0, nCols-1) printF (nCols `quot` 2)
   ANSI.clearLine
   return i
     where printF i = do
